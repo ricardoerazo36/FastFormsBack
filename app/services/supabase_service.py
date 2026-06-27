@@ -244,16 +244,19 @@ def create_response(payload) -> dict:
     response = response_result.data[0]
     response_id = response["id"]
 
-    answers_data = [
-        {
-            "response_id": response_id,
-            "question_id": answer.question_id,
-            "answer_text": answer.answer_text,
-        }
-        for answer in payload.answers
-    ]
+    def _build_answers() -> list:
+        return [
+            {
+                "response_id": response_id,
+                "question_id": a.question_id,
+                "answer_text": a.answer_text,
+            }
+            for a in payload.answers
+        ]
 
-    answers_result = supabase.table("answers").insert(answers_data).execute()
+    answers_result = (
+        supabase.table("answers").insert(_build_answers()).execute()
+    )
     if not answers_result.data:
         # Rollback manual
         supabase.table("responses").delete().eq("id", response_id).execute()
@@ -263,6 +266,54 @@ def create_response(payload) -> dict:
 
     response["answers"] = answers_result.data
     return response
+
+
+def get_open_question_answers(survey_id: int, question_id: int) -> list:
+    """
+    US-16 — Devuelve los ``answer_text`` no vacíos de una pregunta concreta.
+
+    A diferencia de ``get_survey_responses_raw``, esta función no carga el resto
+    de preguntas/respuestas de la encuesta: hace un filtro directo por
+    ``question_id`` para que el coste sea predecible cuando la encuesta tiene
+    miles de respuestas.
+
+    Devuelve siempre una lista (posiblemente vacía). La validación de que la
+    pregunta pertenece a la encuesta se hace en la capa de API.
+    """
+    questions = (
+        supabase.table("questions")
+        .select("id")
+        .eq("id", question_id)
+        .eq("survey_id", survey_id)
+        .execute()
+    )
+    if not (questions.data or []):
+        return []
+
+    response_ids = [
+        row["id"]
+        for row in (
+            supabase.table("responses")
+            .select("id")
+            .eq("survey_id", survey_id)
+            .execute()
+            .data
+            or []
+        )
+    ]
+    if not response_ids:
+        return []
+
+    answers = (
+        supabase.table("answers")
+        .select("answer_text")
+        .in_("response_id", response_ids)
+        .eq("question_id", question_id)
+        .execute()
+        .data
+        or []
+    )
+    return [a["answer_text"] for a in answers if a.get("answer_text")]
 
 
 def get_survey_responses_raw(survey_id: int) -> list:
@@ -382,6 +433,7 @@ def get_survey_results(survey: dict) -> dict:
             .in_("response_id", response_ids)
             .execute()
         )
+
         for answer in (answers_result.data or []):
             answers_by_question.setdefault(answer["question_id"], []).append(
                 answer["answer_text"]

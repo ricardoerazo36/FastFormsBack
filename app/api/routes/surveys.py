@@ -9,7 +9,8 @@ from httpx import ConnectError
 from schemas.survey import SurveyCreate, SurveyResponse
 from schemas.draft import DraftPayload
 from schemas.results import SurveyResults
-from services import supabase_service
+from schemas.sentiment import SentimentAnalysisResponse
+from services import supabase_service, sentiment_service
 from api.deps import get_current_user_id
 
 router = APIRouter(prefix="/surveys", tags=["Surveys"])
@@ -29,6 +30,26 @@ def _get_owned_survey_or_error(survey_id: int, creator_id: str) -> dict:
             detail="No tienes permiso para operar sobre esta encuesta.",
         )
     return survey
+
+
+def _get_question_in_survey_or_error(survey: dict, question_id: int) -> dict:
+    """Carga la pregunta y valida que pertenezca a la encuesta indicada."""
+    full = supabase_service.get_survey_with_questions(survey["id"])
+    if full is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Encuesta no encontrada.",
+        )
+    question = next(
+        (q for q in (full.get("questions") or []) if q.get("id") == question_id),
+        None,
+    )
+    if question is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="La pregunta no pertenece a esta encuesta.",
+        )
+    return question
 
 
 # Endpoint para crear una encuesta con sus preguntas (validacion estricta)
@@ -275,4 +296,78 @@ def export_survey_results_csv(
                 f'attachment; filename="encuesta_{survey_id}_resultados.csv"'
             ),
         },
+    )
+
+
+# US-16 — Análisis de sentimientos de las respuestas abiertas de una pregunta
+# (solo encuestas cerradas).
+@router.post(
+    "/{survey_id}/questions/{question_id}/sentiment-analysis",
+    response_model=SentimentAnalysisResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Análisis de sentimientos de las respuestas abiertas de una pregunta",
+)
+def analyze_question_sentiment(
+    survey_id: int,
+    question_id: int,
+    creator_id: str = Depends(get_current_user_id),
+):
+    """Genera un resumen ejecutivo del sentimiento agregado de las respuestas
+    abiertas de la pregunta indicada.
+
+    La encuesta debe estar en estado ``closed`` (US-04: solo después del cierre
+    se pueden agregar métricas). La pregunta debe ser de tipo ``open`` y
+    pertenecer a la encuesta del creador autenticado.
+    """
+    survey = _get_owned_survey_or_error(survey_id, creator_id)
+
+    if survey.get("status") != "closed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Solo se puede analizar el sentimiento de encuestas cerradas "
+                f"(estado actual: '{survey.get('status')}')."
+            ),
+        )
+
+    question = _get_question_in_survey_or_error(survey, question_id)
+
+    if question.get("question_type") != "open":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Solo las preguntas abiertas admiten análisis de sentimientos "
+                f"(tipo: '{question.get('question_type')}')."
+            ),
+        )
+
+    answers = supabase_service.get_open_question_answers(survey_id, question_id)
+    if not answers:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No hay respuestas para analizar en esta pregunta.",
+        )
+
+    try:
+        result = sentiment_service.analyze_sentiment(question, answers)
+    except sentiment_service.GeminiConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+    except (
+        sentiment_service.GeminiParseError,
+        sentiment_service.GeminiProviderError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        )
+
+    return SentimentAnalysisResponse(
+        survey_id=survey_id,
+        question_id=question_id,
+        question_content=question.get("content") or "",
+        total_answers=len(answers),
+        **result,
     )

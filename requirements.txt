@@ -10,6 +10,13 @@ python-dotenv>=1.0.1
 pydantic[email]>=2.9.0
 python-multipart>=0.0.12
 
+# Voice (US-12 / US-15) — STT con Groq (Whisper hospedado, latencia baja).
+# Sin dependencias nativas: el SDK hace una llamada HTTPS y devuelve el texto.
+groq>=1.5.0
+
+# AI generation (US-13) — SDK oficial de Google Gemini.
+google-genai>=1.0.0
+
 # Testing
 pytest>=8.0.0
 httpx>=0.27.0

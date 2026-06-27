@@ -18,7 +18,7 @@ class QuestionResult(BaseModel):
     total_answers: int
     # Para preguntas de opción (multiple_choice / yes_no)
     options: Optional[List[OptionResult]] = None
-    # Para preguntas abiertas (open)
+    # Para preguntas abiertas (open) — lista plana de textos.
     texts: Optional[List[str]] = None
 
 

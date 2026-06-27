@@ -39,6 +39,28 @@ def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(secu
         )
 
 
+_optional_security = HTTPBearer(auto_error=False)
+
+
+def get_optional_user_id(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_optional_security),
+) -> Optional[str]:
+    """
+    Variante opcional del guard: si el header `Authorization` no llega, devuelve
+    `None` en vez de 401. Se usa en endpoints accesibles por encuestados
+    anónimos (p. ej. `/transcribe` para US-14).
+    """
+    if credentials is None:
+        return None
+    try:
+        user_response = supabase.auth.get_user(credentials.credentials)
+        if not user_response or not user_response.user:
+            return None
+        return user_response.user.id
+    except Exception:
+        return None
+
+
 def assert_survey_in_status(
     survey: Optional[dict],
     allowed_statuses: Iterable[str] = EDITABLE_STATUSES,

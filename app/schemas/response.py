@@ -1,5 +1,5 @@
 from pydantic import BaseModel, field_validator
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
 
@@ -25,6 +25,28 @@ class ResponseCreate(BaseModel):
         if not v:
             raise ValueError("Debes responder al menos una pregunta.")
         return v
+
+
+# ---------------------------------------------------------------------------
+# US-15 t2 — Auto-fill por voz.
+# Misma forma que ResponseCreate, pero `answer_text` puede ser `null` (la IA
+# no encontró respuesta en la transcripción) y `answers` puede ser `[]` (la
+# transcripción no contenía respuestas válidas). Se usa como DTO de salida de
+# `POST /api/v1/responses/auto-fill` para que el frontend autorrellene el
+# formulario y luego el usuario haga el `POST /responses/` definitivo.
+# ---------------------------------------------------------------------------
+
+
+class AnswerDraft(BaseModel):
+    """Respuesta sugerida por la IA. `answer_text` puede ser `None`."""
+
+    question_id: int
+    answer_text: Optional[str] = None
+
+
+class AutoFillResponse(BaseModel):
+    survey_id: int
+    answers: List[AnswerDraft] = []
 
 
 class AnswerResult(BaseModel):
